@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>ROSE LAB | Simulador de corte VR</title>
+<script src="https://aframe.io/releases/1.7.1/aframe.min.js"></script>
+<style>
+:root{font-family:system-ui,Segoe UI,Arial,sans-serif}body{margin:0;background:#14261d;color:white}
+#help{position:fixed;top:12px;left:12px;max-width:410px;background:rgba(10,32,26,.92);border:1px solid #79a78a;border-radius:15px;padding:13px 17px;z-index:8;line-height:1.43;box-shadow:0 8px 22px #0006}#help strong{color:#dcf4a9}
+#help button,#export{background:#c8eb9b;color:#11271a;border:0;border-radius:8px;padding:8px 12px;font-weight:700;cursor:pointer}#export{margin-top:7px}#help small{color:#e1e9de}#status{position:fixed;right:12px;top:12px;background:#10261ddf;padding:12px;border-radius:12px;max-width:250px;z-index:8}#message{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#10261df2;border:1px solid #9bbfa4;border-radius:15px;padding:12px 20px;max-width:min(90vw,650px);text-align:center;z-index:8;font-weight:650}#mobile{display:none}#cutbtn{position:fixed;right:12px;bottom:25px;z-index:15;background:#f9db7b;color:#1a291b;border:0;border-radius:12px;padding:15px 20px;font-weight:800;cursor:pointer;box-shadow:0 5px 15px #0006}#cutbtn:disabled{background:#ccc;color:#555;cursor:not-allowed}
+@media(max-width:650px){#help{max-width:57vw;font-size:12px;padding:8px}#status{font-size:11px;max-width:30vw;padding:8px}#message{font-size:12px;bottom:8px}}
+</style>
+</head>
+<body>
+<div id="help"><strong>ROSE LAB — aprender cortando</strong><div>1. Recorre la cama y observa los capullos.<br>2. Apunta a una rosa y selecciónala.<br>3. Si decides cosecharla, apunta al <b>anillo del tallo</b> y presiona el gatillo o haz clic. Si aún no está lista, déjala en la planta.<br>4. Al terminar pulsa <b>Evaluar cosecha</b>.</div><small>PC: WASD + mouse, clic en la flor y tecla E (o botón Cortar) · Quest 3: apuntar con control y gatillo. Prototipo con flores 3D esquemáticas, no entrenado en color real.</small><br><button id="finish">Evaluar cosecha</button> <button id="reset">Reiniciar</button> <button id="export">Exportar CSV</button></div>
+<div id="status">Cortes: <b id="count">0</b> · Correctos: <b id="good">0</b><br>Flores por evaluar: <b id="remain">8</b><br>Tiempo: <b id="clock">0 s</b></div>
+<div id="message">Observa las rosas desde abajo, como en la finca. Solo corta las que estén listas.</div><button id="cutbtn" disabled>✂️ Cortar rosa seleccionada (E)</button>
+<a-scene background="color: #b1ced5" renderer="colorManagement:true;antialias:true" xr-mode-ui="enabled:true" shadow="type:pcfsoft">
+<a-assets></a-assets>
+<a-entity id="rig" position="0 0 6">
+<a-camera id="camera" position="0 1.6 0" look-controls wasd-controls="acceleration:17" ><a-cursor color="#edffa6" fuse="false" raycaster="objects: .pickable; far: 15" geometry="primitive:ring;radiusInner:.008;radiusOuter:.013" material="shader:flat;opacity:.95"></a-cursor></a-camera>
+<a-entity laser-controls="hand:right" raycaster="objects: .pickable;far:15" line="color: #f3ffe6"></a-entity>
+<a-entity laser-controls="hand:left" raycaster="objects: .pickable;far:15" line="color: #f3ffe6"></a-entity>
+</a-entity>
+<a-light type="ambient" intensity=".9" color="#fff7e9"></a-light><a-light type="directional" position="-3 8 4" intensity="1" cast-shadow="true"></a-light>
+<a-plane rotation="-90 0 0" width="30" height="40" color="#715940" shadow="receive:true"></a-plane>
+<a-box position="-1.4 .12 -2" width="1.25" height=".24" depth="12" color="#72533e"></a-box><a-box position="1.4 .12 -2" width="1.25" height=".24" depth="12" color="#72533e"></a-box>
+<a-plane position="0 .012 -2" rotation="-90 0 0" width="1.4" height="12" color="#b99a6e"></a-plane>
+<a-text value="ROSE LAB | CAMA DE PRACTICA" position="-2.5 2.65 -6.8" color="#243a28" width="5.5" align="center"></a-text>
+<a-text value="Selecciona la rosa y corta el tallo" position="-1.8 2.28 -6.8" color="#29412c" width="3.7" align="center"></a-text>
+<a-entity id="garden"></a-entity>
+</a-scene>
+<script>
+// Datos ficticios de entrenamiento: NO son etiquetas validadas por un floricultor.
+const samples=[
+ {stage:1,color:'#c93651',side:-1,z:2.4}, {stage:2,color:'#c93651',side:1,z:2.4},
+ {stage:3,color:'#e985a1',side:-1,z:.4}, {stage:1,color:'#e985a1',side:1,z:.4},
+ {stage:2,color:'#f2b86b',side:-1,z:-1.6}, {stage:2,color:'#d9527d',side:1,z:-1.6},
+ {stage:1,color:'#d9527d',side:-1,z:-3.6}, {stage:3,color:'#f2b86b',side:1,z:-3.6}
+];
+const garden=document.getElementById('garden'), message=document.getElementById('message');
+const records=[]; let selected=null, start=Date.now(), ended=false;
+function el(tag,attrs={},parent){let e=document.createElement(tag);Object.entries(attrs).forEach(([k,v])=>e.setAttribute(k,v)); if(parent)parent.appendChild(e);return e;}
+function flower(s,i){
+ let x=s.side*1.45, y=1.22, z=s.z;
+ let root=el('a-entity',{position:`${x} 0 ${z}`},garden);s.root=root;s.index=i;s.cut=false;
+ let foliage=el('a-entity',{},root);
+ el('a-cylinder',{position:'0 .75 0',radius:'.017',height:'1.5',color:'#377c45'},foliage);
+ for(let k=0;k<5;k++){
+   let angle=k*Math.PI*2/5;
+   el('a-sphere',{position:`${Math.sin(angle)*.22} ${.62+k*.1} ${Math.cos(angle)*.22}`,rotation:`0 ${angle*180/Math.PI} 25`,scale:'.28 .095 .12',color:'#397f42'},foliage);
+ }
+ let head=el('a-entity',{position:'0 1.55 0',class:'pickable'},root);s.head=head;
+ // Shapes illustrative, intentionally exaggerated: pointed / firm / open.
+ const p={1:{rad:.105,h:.26,n:4,tilt:5},2:{rad:.16,h:.28,n:6,tilt:18},3:{rad:.24,h:.16,n:8,tilt:53}}[s.stage];
+ el('a-cone',{position:`0 ${p.h*.30} 0`,radiusBottom:p.rad*.83,radiusTop:s.stage===1?'.007':p.rad*.45,height:p.h,color:s.color},head);
+ for(let k=0;k<p.n;k++){
+  let a=k*360/p.n,angle=a*Math.PI/180;
+  let pet=el('a-sphere',{position:`${Math.sin(angle)*p.rad*.56} ${p.h*.46} ${Math.cos(angle)*p.rad*.56}`,rotation:`${p.tilt} ${a} 0`,scale:`${p.rad*.7} ${p.h*.68} ${p.rad*.45}`,color:s.color},head);
+ }
+ el('a-sphere',{position:'0 .05 0',radius:'.045',color:s.color},head);
+ // Collider con geometría propia: A-Frame no detecta clics sobre entidades vacías.
+ let collider=el('a-sphere', {position:'0 .09 0',radius:'.24',class:'pickable',material:'color:#ffffff;transparent:true;opacity:0.001;depthWrite:false'},head);
+ collider.addEventListener('click',()=>select(s));
+ // Target appears only after inspection. It models choosing a position, not a real pruning standard.
+ let ring=el('a-torus',{position:'0 1.37 0',rotation:'90 0 0',radius:'.095',radiusTubular:'.023',color:'#ffef76',visible:'false',class:'pickable'},root);
+ let hit=el('a-cylinder',{position:'0 1.37 0',radius:'.12',height:'.15',material:'opacity:0;transparent:true',visible:'false',class:'pickable'},root);
+ s.ring=ring;s.hit=hit;hit.addEventListener('click',()=>cut(s));ring.addEventListener('click',()=>cut(s));
+ return root;
+}
+function say(t){message.textContent=t;}
+function select(s){if(ended||s.cut)return; if(selected&&selected!==s){selected.ring.setAttribute('visible','false');selected.hit.setAttribute('visible','false');} selected=s;document.getElementById('cutbtn').disabled=false;s.ring.setAttribute('visible','true');s.hit.setAttribute('visible','true');say('Flor seleccionada. ¿La cosecharías? Si sí, apunta al anillo amarillo del tallo y activa el corte; si no, continúa con otra flor.');}
+function cut(s){if(ended||s.cut||selected!==s)return; s.cut=true;let ok=s.stage===2; records.push({flower:s.index+1,stage:s.stage,result:ok?'correcto':'corte_no_recomendado',seconds:Math.round((Date.now()-start)/1000)});
+ s.head.setAttribute('animation','property:position;to:0 .18 0;dur:650;easing:easeInQuad');s.head.setAttribute('animation__fade','property:scale;to:.05 .05 .05;dur:650');s.ring.setAttribute('visible','false');s.hit.setAttribute('visible','false'); selected=null;document.getElementById('cutbtn').disabled=true;
+ say(ok?'¡Buen corte! La forma corresponde al punto 2 en este ejemplo.':'Cuidado: esta rosa no corresponde al punto 2. Observa la forma de la cabeza y espera si está cerrada o demasiado abierta.');update();}
+function update(){document.getElementById('count').textContent=records.length;document.getElementById('good').textContent=records.filter(r=>r.result==='correcto').length;document.getElementById('remain').textContent=samples.length-records.length;}
+function evaluate(){if(ended)return;ended=true;let good=records.filter(r=>r.result==='correcto').length, missed=samples.filter(s=>s.stage===2&&!s.cut).length, wrong=records.length-good;const potential=samples.filter(s=>s.stage===2).length; const accuracy=(samples.length-missed-wrong)/samples.length*100;
+ say(`Resultado: ${good}/${potential} rosas listas cortadas. ${wrong} cortes incorrectos; ${missed} rosas listas sin cortar. Exactitud de decisiones: ${accuracy.toFixed(0)}%. Descarga el CSV para evidencias.`);
+ records.push({flower:'RESUMEN',stage:'',result:`correctos:${good};erroneos:${wrong};omitidos:${missed};exactitud:${accuracy.toFixed(0)}%`,seconds:Math.round((Date.now()-start)/1000)});
+}
+document.getElementById('cutbtn').onclick=()=>{if(selected)cut(selected);else say('Primero selecciona una rosa haciendo clic sobre su cabeza.');};
+window.addEventListener('keydown',e=>{if(e.key.toLowerCase()==='e'&&selected){e.preventDefault();cut(selected);}});
+document.getElementById('finish').onclick=evaluate;
+document.getElementById('reset').onclick=()=>location.reload();
+document.getElementById('export').onclick=()=>{const rows=[['flor','punto_simulado','resultado','segundos'],...records.map(r=>[r.flower,r.stage,r.result,r.seconds])];let csv=rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');let blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='rose-lab-cortes.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);};
+setInterval(()=>{document.getElementById('clock').textContent=Math.round((Date.now()-start)/1000)+' s';},1000);
+samples.forEach(flower);update();
+// Universal WebXR controller ray selection (trigger -> intersection click).
+document.querySelectorAll('[laser-controls]').forEach(hand=>{hand.addEventListener('triggerdown',()=>{let ray=hand.components.raycaster;let hits=ray&&ray.intersectedEls;if(hits&&hits.length)hits[0].emit('click');});});
+</script>
+</body></html>
